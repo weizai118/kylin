@@ -246,6 +246,7 @@ https://github.com/michal-harish/kafka-hadoop-loader/blob/master/LICENSE
 
 
 ==============================================================================
+<<<<<<< HEAD
 For Apache Spark:
 ==============================================================================
 apache/spark is licensed under the Apache License 2.0
@@ -259,6 +260,8 @@ https://github.com/apache/tomcat/blob/trunk/LICENSE
 
 
 ==============================================================================
+=======
+>>>>>>> KYLIN-3408 update LICENSE
 For RocksDB:
 ==============================================================================
 RocksDB is dual-licensed under both the GPLv2 and Apache 2.0 License.You may
