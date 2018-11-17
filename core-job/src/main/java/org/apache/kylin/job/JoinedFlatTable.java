@@ -23,11 +23,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.kylin.common.KylinConfig;
 import org.apache.kylin.cube.CubeSegment;
+import org.apache.kylin.cube.model.CubeDesc;
+import org.apache.kylin.cube.model.RowKeyColDesc;
 import org.apache.kylin.job.engine.JobEngineConfig;
 import org.apache.kylin.metadata.model.DataModelDesc;
 import org.apache.kylin.metadata.model.IJoinedFlatTableDesc;
@@ -37,6 +40,8 @@ import org.apache.kylin.metadata.model.PartitionDesc;
 import org.apache.kylin.metadata.model.SegmentRange;
 import org.apache.kylin.metadata.model.TableRef;
 import org.apache.kylin.metadata.model.TblColRef;
+
+import com.google.common.collect.Lists;
 
 /**
  *
@@ -85,7 +90,7 @@ public class JoinedFlatTable {
         }
         ddl.append(")" + "\n");
         if (TEXTFILE.equals(storageFormat)) {
-            ddl.append("ROW FORMAT DELIMITED FIELDS TERMINATED BY '\\" + fieldDelimiter + "'\n");
+            ddl.append("ROW FORMAT DELIMITED FIELDS TERMINATED BY '" + fieldDelimiter + "'\n");
         }
         ddl.append("STORED AS " + storageFormat + "\n");
         ddl.append("LOCATION '" + getTableDir(flatDesc, storageDfsDir) + "';").append("\n");
@@ -140,7 +145,7 @@ public class JoinedFlatTable {
             if (i > 0) {
                 sql.append(",");
             }
-            String colTotalName = String.format("%s.%s", col.getTableRef().getTableName(), col.getName());
+            String colTotalName = String.format(Locale.ROOT, "%s.%s", col.getTableRef().getTableName(), col.getName());
             if (skipAsList.contains(colTotalName)) {
                 sql.append(col.getExpressionInSourceDB() + sep);
             } else {
@@ -170,7 +175,7 @@ public class JoinedFlatTable {
                     if (pk.length != fk.length) {
                         throw new RuntimeException("Invalid join condition of lookup table:" + lookupDesc);
                     }
-                    String joinType = join.getType().toUpperCase();
+                    String joinType = join.getType().toUpperCase(Locale.ROOT);
 
                     sql.append(joinType + " JOIN " + dimTable.getTableIdentity() + " as " + dimTable.getAlias() + sep);
                     sql.append("ON ");
@@ -188,8 +193,13 @@ public class JoinedFlatTable {
         }
     }
 
-    private static void appendDistributeStatement(StringBuilder sql, TblColRef redistCol) {
-        sql.append(" DISTRIBUTE BY ").append(colName(redistCol, true)).append(";\n");
+    private static void appendDistributeStatement(StringBuilder sql, List<TblColRef> redistCols) {
+        sql.append(" DISTRIBUTE BY ");
+        for (TblColRef redistCol : redistCols) {
+            sql.append(colName(redistCol, true)).append(",");
+        }
+        sql.deleteCharAt(sql.length() - 1);
+        sql.append(";\n");
     }
 
     private static void appendClusterStatement(StringBuilder sql, TblColRef clusterCol) {
@@ -237,7 +247,7 @@ public class JoinedFlatTable {
     }
 
     private static String getHiveDataType(String javaDataType) {
-        String originDataType = javaDataType.toLowerCase();
+        String originDataType = javaDataType.toLowerCase(Locale.ROOT);
         String hiveDataType;
         if (originDataType.startsWith("varchar")) {
             hiveDataType = "string";
@@ -252,16 +262,30 @@ public class JoinedFlatTable {
         return hiveDataType;
     }
 
-    public static String generateRedistributeFlatTableStatement(IJoinedFlatTableDesc flatDesc) {
+    public static String generateRedistributeFlatTableStatement(IJoinedFlatTableDesc flatDesc, CubeDesc cubeDesc) {
         final String tableName = flatDesc.getTableName();
         StringBuilder sql = new StringBuilder();
         sql.append("INSERT OVERWRITE TABLE " + tableName + " SELECT * FROM " + tableName);
 
-        TblColRef clusterCol = flatDesc.getClusterBy();
-        if (clusterCol != null) {
-            appendClusterStatement(sql, clusterCol);
+        if (flatDesc.getClusterBy() != null) {
+            appendClusterStatement(sql, flatDesc.getClusterBy());
+        } else if (flatDesc.getDistributedBy() != null) {
+            appendDistributeStatement(sql, Lists.newArrayList(flatDesc.getDistributedBy()));
         } else {
-            appendDistributeStatement(sql, flatDesc.getDistributedBy());
+            int redistColumnCount = cubeDesc.getConfig().getHiveRedistributeColumnCount();
+
+            RowKeyColDesc[] rowKeyColDescs = cubeDesc.getRowkey().getRowKeyColumns();
+
+            if (rowKeyColDescs.length < redistColumnCount)
+                redistColumnCount = rowKeyColDescs.length;
+
+            List<TblColRef> redistColumns = Lists.newArrayListWithCapacity(redistColumnCount);
+
+            for (int i = 0; i < redistColumnCount; i++) {
+                redistColumns.add(rowKeyColDescs[i].getColRef());
+            }
+
+            appendDistributeStatement(sql, redistColumns);
         }
 
         return sql.toString();

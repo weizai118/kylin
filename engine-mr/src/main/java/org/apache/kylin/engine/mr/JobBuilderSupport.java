@@ -19,23 +19,35 @@
 package org.apache.kylin.engine.mr;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import org.apache.kylin.common.KylinConfig;
+import org.apache.kylin.common.StorageURL;
 import org.apache.kylin.cube.CubeSegment;
 import org.apache.kylin.cube.cuboid.CuboidModeEnum;
+import org.apache.kylin.cube.model.CubeDesc;
 import org.apache.kylin.engine.mr.common.BatchConstants;
 import org.apache.kylin.engine.mr.common.HadoopShellExecutable;
 import org.apache.kylin.engine.mr.common.MapReduceExecutable;
 import org.apache.kylin.engine.mr.steps.CalculateStatsFromBaseCuboidJob;
 import org.apache.kylin.engine.mr.steps.CreateDictionaryJob;
 import org.apache.kylin.engine.mr.steps.CubingExecutableUtil;
+import org.apache.kylin.engine.mr.steps.ExtractDictionaryFromGlobalJob;
 import org.apache.kylin.engine.mr.steps.FactDistinctColumnsJob;
 import org.apache.kylin.engine.mr.steps.MergeDictionaryStep;
+import org.apache.kylin.engine.mr.steps.MergeStatisticsStep;
+import org.apache.kylin.engine.mr.steps.SaveStatisticsStep;
 import org.apache.kylin.engine.mr.steps.UHCDictionaryJob;
 import org.apache.kylin.engine.mr.steps.UpdateCubeInfoAfterBuildStep;
 import org.apache.kylin.engine.mr.steps.UpdateCubeInfoAfterMergeStep;
+import org.apache.kylin.engine.mr.steps.UpdateDictionaryStep;
 import org.apache.kylin.job.constant.ExecutableConstants;
 import org.apache.kylin.job.engine.JobEngineConfig;
+import org.apache.kylin.metadata.model.TblColRef;
 
 import com.google.common.base.Preconditions;
 
@@ -53,6 +65,7 @@ public class JobBuilderSupport {
     final public static String PathNameCuboidBase = "base_cuboid";
     final public static String PathNameCuboidOld = "old";
     final public static String PathNameCuboidInMem = "in_memory";
+    final public static Pattern JOB_NAME_PATTERN = Pattern.compile("kylin-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})");
 
     public JobBuilderSupport(CubeSegment seg, String submitter) {
         Preconditions.checkNotNull(seg, "segment cannot be null");
@@ -76,6 +89,34 @@ public class JobBuilderSupport {
         appendExecCmdParameters(cmd, BatchConstants.ARG_CUBING_JOB_ID, jobId);
         result.setMapReduceParams(cmd.toString());
         result.setCounterSaveAs(CubingJob.SOURCE_RECORD_COUNT + "," + CubingJob.SOURCE_SIZE_BYTES);
+        return result;
+    }
+
+    public MergeStatisticsStep createMergeStatisticsStep(CubeSegment seg, List<String> mergingSegmentIds, String mergedStatisticsFolder) {
+        MergeStatisticsStep result = new MergeStatisticsStep();
+        result.setName(ExecutableConstants.STEP_NAME_MERGE_STATISTICS);
+
+        CubingExecutableUtil.setCubeName(seg.getRealization().getName(), result.getParams());
+        CubingExecutableUtil.setSegmentId(seg.getUuid(), result.getParams());
+        CubingExecutableUtil.setMergingSegmentIds(mergingSegmentIds, result.getParams());
+        CubingExecutableUtil.setMergedStatisticsPath(mergedStatisticsFolder, result.getParams());
+
+        return result;
+    }
+
+    public UpdateDictionaryStep createUpdateDictionaryStep(CubeSegment seg, String jobId, List<String> mergingSegmentIds) {
+        UpdateDictionaryStep result = new UpdateDictionaryStep();
+        result.setName(ExecutableConstants.STEP_NAME_MERGE_UPDATE_DICTIONARY);
+
+        CubingExecutableUtil.setCubeName(seg.getRealization().getName(), result.getParams());
+        CubingExecutableUtil.setSegmentId(seg.getUuid(), result.getParams());
+        CubingExecutableUtil.setMergingSegmentIds(mergingSegmentIds, result.getParams());
+
+        // merged dict info path
+        result.getParams().put(BatchConstants.ARG_DICT_PATH, getDictInfoPath(jobId));
+        // metadata url
+        result.getParams().put(BatchConstants.ARG_META_URL, getSegmentMetadataUrl(seg.getConfig(), jobId));
+
         return result;
     }
 
@@ -129,10 +170,28 @@ public class JobBuilderSupport {
         appendExecCmdParameters(cmd, BatchConstants.ARG_SEGMENT_ID, seg.getUuid());
         appendExecCmdParameters(cmd, BatchConstants.ARG_INPUT, getFactDistinctColumnsPath(jobId));
         appendExecCmdParameters(cmd, BatchConstants.ARG_DICT_PATH, getDictRootPath(jobId));
+        appendExecCmdParameters(cmd, BatchConstants.ARG_CUBING_JOB_ID, jobId);
 
         buildDictionaryStep.setJobParams(cmd.toString());
         buildDictionaryStep.setJobClass(CreateDictionaryJob.class);
         return buildDictionaryStep;
+    }
+
+    public MapReduceExecutable createExtractDictionaryFromGlobalJob(String jobId) {
+        MapReduceExecutable result = new MapReduceExecutable();
+        result.setName(ExecutableConstants.STEP_NAME_EXTRACT_DICTIONARY_FROM_GLOBAL);
+        result.setMapReduceJobClass(ExtractDictionaryFromGlobalJob.class);
+        StringBuilder cmd = new StringBuilder();
+        appendMapReduceParameters(cmd);
+        appendExecCmdParameters(cmd, BatchConstants.ARG_CUBE_NAME, seg.getRealization().getName());
+        appendExecCmdParameters(cmd, BatchConstants.ARG_SEGMENT_ID, seg.getUuid());
+        appendExecCmdParameters(cmd, BatchConstants.ARG_JOB_NAME,
+                "Kylin_Extract_Dictionary_from_Global_" + seg.getRealization().getName() + "_Step");
+        appendExecCmdParameters(cmd, BatchConstants.ARG_CUBING_JOB_ID, jobId);
+        appendExecCmdParameters(cmd, BatchConstants.ARG_OUTPUT, getShrunkenDictionaryPath(jobId));
+
+        result.setMapReduceParams(cmd.toString());
+        return result;
     }
 
     public UpdateCubeInfoAfterBuildStep createUpdateCubeInfoAfterBuildStep(String jobId, LookupMaterializeContext lookupMaterializeContext) {
@@ -173,6 +232,43 @@ public class JobBuilderSupport {
         return result;
     }
 
+    public boolean isEnableUHCDictStep() {
+        if (!config.getConfig().isBuildUHCDictWithMREnabled()) {
+            return false;
+        }
+
+        List<TblColRef> uhcColumns = seg.getCubeDesc().getAllUHCColumns();
+        if (uhcColumns.size() == 0) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public LookupMaterializeContext addMaterializeLookupTableSteps(final CubingJob result) {
+        LookupMaterializeContext lookupMaterializeContext = new LookupMaterializeContext(result);
+        CubeDesc cubeDesc = seg.getCubeDesc();
+        List<String> allSnapshotTypes = cubeDesc.getAllExtLookupSnapshotTypes();
+        if (allSnapshotTypes.isEmpty()) {
+            return null;
+        }
+        for (String snapshotType : allSnapshotTypes) {
+            ILookupMaterializer materializer = MRUtil.getExtLookupMaterializer(snapshotType);
+            materializer.materializeLookupTablesForCube(lookupMaterializeContext, seg.getCubeInstance());
+        }
+        return lookupMaterializeContext;
+    }
+
+    public SaveStatisticsStep createSaveStatisticsStep(String jobId) {
+        SaveStatisticsStep result = new SaveStatisticsStep();
+        result.setName(ExecutableConstants.STEP_NAME_SAVE_STATISTICS);
+        CubingExecutableUtil.setCubeName(seg.getRealization().getName(), result.getParams());
+        CubingExecutableUtil.setSegmentId(seg.getUuid(), result.getParams());
+        CubingExecutableUtil.setStatisticsPath(getStatisticsPath(jobId), result.getParams());
+        CubingExecutableUtil.setCubingJobId(jobId, result.getParams());
+        return result;
+    }
+
     // ============================================================================
 
     public String getJobWorkingDir(String jobId) {
@@ -192,7 +288,7 @@ public class JobBuilderSupport {
     }
 
     public void appendMapReduceParameters(StringBuilder buf) {
-        appendMapReduceParameters(buf, JobEngineConfig.DEFAUL_JOB_CONF_SUFFIX);
+        appendMapReduceParameters(buf, JobEngineConfig.DEFAULT_JOB_CONF_SUFFIX);
     }
 
     public void appendMapReduceParameters(StringBuilder buf, String jobType) {
@@ -214,8 +310,16 @@ public class JobBuilderSupport {
         return getRealizationRootPath(jobId) + "/fact_distinct_columns/" + BatchConstants.CFG_OUTPUT_STATISTICS;
     }
 
+    public String getShrunkenDictionaryPath(String jobId) {
+        return getRealizationRootPath(jobId) + "/dictionary_shrunken";
+    }
+
     public String getDictRootPath(String jobId) {
         return getRealizationRootPath(jobId) + "/dict";
+    }
+
+    public String getDictInfoPath(String jobId) {
+        return getRealizationRootPath(jobId) + "/dict_info";
     }
 
     public String getOptimizationRootPath(String jobId) {
@@ -228,6 +332,14 @@ public class JobBuilderSupport {
 
     public String getOptimizationCuboidPath(String jobId) {
         return getOptimizationRootPath(jobId) + "/cuboid/";
+    }
+
+    public String getHBaseConfFilePath(String jobId) {
+        return getJobWorkingDir(jobId) + "/hbase-conf.xml";
+    }
+
+    public String getCounterOuputPath(String jobId) {
+        return getRealizationRootPath(jobId) + "/counter";
     }
 
     // ============================================================================
@@ -269,4 +381,19 @@ public class JobBuilderSupport {
         return getRealizationRootPath(jobId) + "/metadata";
     }
 
+    public static String extractJobIDFromPath(String path) {
+        Matcher matcher = JOB_NAME_PATTERN.matcher(path);
+        // check the first occurrence
+        if (matcher.find()) {
+            return matcher.group(1);
+        } else {
+            throw new IllegalStateException("Can not extract job ID from file path : " + path);
+        }
+    }
+
+    public String getSegmentMetadataUrl(KylinConfig kylinConfig, String jobId) {
+        Map<String, String> param = new HashMap<>();
+        param.put("path", getDumpMetadataPath(jobId));
+        return new StorageURL(kylinConfig.getMetadataUrl().getIdentifier(), "hdfs", param).toString();
+    }
 }

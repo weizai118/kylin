@@ -18,6 +18,7 @@
 
 package org.apache.kylin.job.impl.threadpool;
 
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -46,22 +47,22 @@ import com.google.common.collect.Maps;
  */
 public class DefaultScheduler implements Scheduler<AbstractExecutable>, ConnectionStateListener {
 
-    private static DefaultScheduler INSTANCE = null;
+    private static DefaultScheduler INSTANCE;
 
-    public static DefaultScheduler getInstance() {
+    public synchronized static DefaultScheduler getInstance() {
         if (INSTANCE == null) {
             INSTANCE = createInstance();
         }
         return INSTANCE;
     }
-    
-    public synchronized static DefaultScheduler createInstance() {
+
+    public static synchronized DefaultScheduler createInstance() {
         destroyInstance();
         INSTANCE = new DefaultScheduler();
         return INSTANCE;
     }
 
-    public synchronized static void destroyInstance() {
+    public static synchronized void destroyInstance() {
         DefaultScheduler tmp = INSTANCE;
         INSTANCE = null;
         if (tmp != null) {
@@ -75,7 +76,7 @@ public class DefaultScheduler implements Scheduler<AbstractExecutable>, Connecti
     }
 
     // ============================================================================
-    
+
     private JobLock jobLock;
     private ExecutableManager executableManager;
     private FetcherRunner fetcher;
@@ -114,6 +115,10 @@ public class DefaultScheduler implements Scheduler<AbstractExecutable>, Connecti
             } catch (ExecuteException e) {
                 logger.error("ExecuteException job:" + executable.getId(), e);
             } catch (Exception e) {
+                if (AbstractExecutable.isMetaDataPersistException(e, 5)) {
+                    // Job fail due to PersistException
+                    ExecutableManager.getInstance(jobEngineConfig.getConfig()).forceKillJobWithRetry(executable.getId());
+                }
                 logger.error("unknown error execute job:" + executable.getId(), e);
             } finally {
                 context.removeRunningJob(executable);
@@ -140,7 +145,7 @@ public class DefaultScheduler implements Scheduler<AbstractExecutable>, Connecti
         jobLock = lock;
 
         String serverMode = jobEngineConfig.getConfig().getServerMode();
-        if (!("job".equals(serverMode.toLowerCase()) || "all".equals(serverMode.toLowerCase()))) {
+        if (!("job".equals(serverMode.toLowerCase(Locale.ROOT)) || "all".equals(serverMode.toLowerCase(Locale.ROOT)))) {
             logger.info("server mode: " + serverMode + ", no need to run job scheduler");
             return;
         }

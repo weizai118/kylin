@@ -21,6 +21,7 @@ package org.apache.kylin.cube.cli;
 import java.io.IOException;
 import java.util.Set;
 
+import org.apache.hadoop.io.IOUtils;
 import org.apache.kylin.common.KylinConfig;
 import org.apache.kylin.common.util.Dictionary;
 import org.apache.kylin.cube.CubeInstance;
@@ -29,6 +30,7 @@ import org.apache.kylin.cube.CubeSegment;
 import org.apache.kylin.cube.model.DimensionDesc;
 import org.apache.kylin.dict.DictionaryProvider;
 import org.apache.kylin.dict.DistinctColumnValuesProvider;
+import org.apache.kylin.dict.lookup.ILookupTable;
 import org.apache.kylin.metadata.model.JoinDesc;
 import org.apache.kylin.metadata.model.TableRef;
 import org.apache.kylin.metadata.model.TblColRef;
@@ -42,26 +44,28 @@ public class DictionaryGeneratorCLI {
 
     private static final Logger logger = LoggerFactory.getLogger(DictionaryGeneratorCLI.class);
 
-    public static void processSegment(KylinConfig config, String cubeName, String segmentID, DistinctColumnValuesProvider factTableValueProvider, DictionaryProvider dictProvider) throws IOException {
+    public static void processSegment(KylinConfig config, String cubeName, String segmentID, String uuid,
+            DistinctColumnValuesProvider factTableValueProvider, DictionaryProvider dictProvider) throws IOException {
         CubeInstance cube = CubeManager.getInstance(config).getCube(cubeName);
         CubeSegment segment = cube.getSegmentById(segmentID);
 
-        processSegment(config, segment, factTableValueProvider, dictProvider);
+        processSegment(config, segment, uuid, factTableValueProvider, dictProvider);
     }
 
-    private static void processSegment(KylinConfig config, CubeSegment cubeSeg, DistinctColumnValuesProvider factTableValueProvider, DictionaryProvider dictProvider) throws IOException {
+    private static void processSegment(KylinConfig config, CubeSegment cubeSeg, String uuid,
+            DistinctColumnValuesProvider factTableValueProvider, DictionaryProvider dictProvider) throws IOException {
         CubeManager cubeMgr = CubeManager.getInstance(config);
 
         // dictionary
         for (TblColRef col : cubeSeg.getCubeDesc().getAllColumnsNeedDictionaryBuilt()) {
             logger.info("Building dictionary for " + col);
             IReadableTable inpTable = factTableValueProvider.getDistinctValuesFor(col);
-            
+
             Dictionary<String> preBuiltDict = null;
             if (dictProvider != null) {
                 preBuiltDict = dictProvider.getDictionary(col);
             }
-        
+
             if (preBuiltDict != null) {
                 logger.debug("Dict for '" + col.getName() + "' has already been built, save it");
                 cubeMgr.saveDictionary(cubeSeg, col, inpTable, preBuiltDict);
@@ -87,16 +91,19 @@ public class DictionaryGeneratorCLI {
 
         for (String tableIdentity : toSnapshot) {
             logger.info("Building snapshot of " + tableIdentity);
-            cubeMgr.buildSnapshotTable(cubeSeg, tableIdentity);
+            cubeMgr.buildSnapshotTable(cubeSeg, tableIdentity, uuid);
         }
-        
+
         CubeInstance updatedCube = cubeMgr.getCube(cubeSeg.getCubeInstance().getName());
         cubeSeg = updatedCube.getSegmentById(cubeSeg.getUuid());
         for (TableRef lookup : toCheckLookup) {
             logger.info("Checking snapshot of " + lookup);
             try {
                 JoinDesc join = cubeSeg.getModel().getJoinsTree().getJoinByPKSide(lookup);
-                cubeMgr.getLookupTable(cubeSeg, join);
+                ILookupTable table = cubeMgr.getLookupTable(cubeSeg, join);
+                if (table != null) {
+                    IOUtils.closeStream(table);
+                }
             } catch (Throwable th) {
                 throw new RuntimeException("Checking snapshot of " + lookup + " failed.", th);
             }

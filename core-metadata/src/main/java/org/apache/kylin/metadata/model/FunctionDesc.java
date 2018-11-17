@@ -22,6 +22,7 @@ import java.io.Serializable;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -47,7 +48,7 @@ public class FunctionDesc implements Serializable {
 
     public static FunctionDesc newInstance(String expression, ParameterDesc param, String returnType) {
         FunctionDesc r = new FunctionDesc();
-        r.expression = (expression == null) ? null : expression.toUpperCase();
+        r.expression = (expression == null) ? null : expression.toUpperCase(Locale.ROOT);
         r.parameter = param;
         r.returnType = returnType;
         r.returnDataType = DataType.getType(returnType);
@@ -59,6 +60,7 @@ public class FunctionDesc implements Serializable {
     public static final String FUNC_MAX = "MAX";
     public static final String FUNC_COUNT = "COUNT";
     public static final String FUNC_COUNT_DISTINCT = "COUNT_DISTINCT";
+    public static final String FUNC_GROUPING = "GROUPING";
     public static final String FUNC_PERCENTILE = "PERCENTILE_APPROX";
     public static final Set<String> BUILT_IN_AGGREGATIONS = Sets.newHashSet();
 
@@ -90,7 +92,7 @@ public class FunctionDesc implements Serializable {
     private boolean isDimensionAsMetric = false;
 
     public void init(DataModelDesc model) {
-        expression = expression.toUpperCase();
+        expression = expression.toUpperCase(Locale.ROOT);
         if (expression.equals(PercentileMeasureType.FUNC_PERCENTILE)) {
             expression = PercentileMeasureType.FUNC_PERCENTILE_APPROX; // for backward compatibility
         }
@@ -158,7 +160,7 @@ public class FunctionDesc implements Serializable {
             if (isMax() || isMin()) {
                 return parameter.getColRefs().get(0).getType();
             } else if (isSum()) {
-                return parameter.getColRefs().get(0).getType();
+                return parameter.isColumnType() ? parameter.getColRefs().get(0).getType() : DataType.getType("bigint");
             } else if (isCount()) {
                 return DataType.getType("bigint");
             } else {
@@ -249,7 +251,7 @@ public class FunctionDesc implements Serializable {
     public void setExpression(String expression) {
         this.expression = expression;
     }
-    
+
     public ParameterDesc getParameter() {
         return parameter;
     }

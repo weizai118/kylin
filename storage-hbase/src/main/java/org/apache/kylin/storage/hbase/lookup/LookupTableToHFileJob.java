@@ -19,6 +19,7 @@
 package org.apache.kylin.storage.hbase.lookup;
 
 import java.io.IOException;
+import java.util.Locale;
 import java.util.Random;
 
 import org.apache.commons.cli.Options;
@@ -71,7 +72,7 @@ public class LookupTableToHFileJob extends AbstractHadoopJob {
     protected static final Logger logger = LoggerFactory.getLogger(LookupTableToHFileJob.class);
 
     private static String ALPHA_NUM = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
+    private static final Random ran = new Random();
     private static int HBASE_TABLE_LENGTH = 10;
 
     public int run(String[] args) throws Exception {
@@ -87,9 +88,10 @@ public class LookupTableToHFileJob extends AbstractHadoopJob {
             parseOptions(options, args);
 
             Path output = new Path(getOptionValue(OPTION_OUTPUT_PATH));
-            String cubeName = getOptionValue(OPTION_CUBE_NAME).toUpperCase();
+            String cubeName = getOptionValue(OPTION_CUBE_NAME).toUpperCase(Locale.ROOT);
             String tableName = getOptionValue(OPTION_TABLE_NAME);
             String lookupSnapshotID = getOptionValue(OPTION_LOOKUP_SNAPSHOT_ID);
+            String jobId = getOptionValue(OPTION_CUBING_JOB_ID);
 
             KylinConfig kylinConfig = KylinConfig.getInstanceFromEnv();
             CubeManager cubeMgr = CubeManager.getInstance(kylinConfig);
@@ -101,7 +103,7 @@ public class LookupTableToHFileJob extends AbstractHadoopJob {
             ExtTableSnapshotInfoManager extSnapshotInfoManager = ExtTableSnapshotInfoManager.getInstance(kylinConfig);
             removeSnapshotIfExist(extSnapshotInfoManager, kylinConfig, tableName, lookupSnapshotID);
 
-            IReadableTable sourceTable = SourceManager.createReadableTable(tableDesc);
+            IReadableTable sourceTable = SourceManager.createReadableTable(tableDesc, jobId);
 
             logger.info("create HTable for source table snapshot:{}", tableName);
             Pair<String, Integer> hTableNameAndShard = createHTable(tableName, sourceTable, kylinConfig);
@@ -118,7 +120,7 @@ public class LookupTableToHFileJob extends AbstractHadoopJob {
 
             FileOutputFormat.setOutputPath(job, output);
 
-            IMRTableInputFormat tableInputFormat = MRUtil.getTableInputFormat(tableDesc);
+            IMRTableInputFormat tableInputFormat = MRUtil.getTableInputFormat(tableDesc, jobId);
             tableInputFormat.configureJob(job);
             job.setMapperClass(LookupTableToHFileMapper.class);
 
@@ -259,9 +261,8 @@ public class LookupTableToHFileJob extends AbstractHadoopJob {
                 + IRealizationConstants.LookupHbaseStorageLocationPrefix + tableName + "_";
         String namespace = kylinConfig.getHBaseStorageNameSpace();
         String hTableName;
-        Random ran = new Random();
         do {
-            StringBuffer sb = new StringBuffer();
+            StringBuilder sb = new StringBuilder();
             if ((namespace.equals("default") || namespace.equals("")) == false) {
                 sb.append(namespace).append(":");
             }

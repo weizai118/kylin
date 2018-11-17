@@ -20,6 +20,7 @@ package org.apache.kylin.common.util;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Locale;
 
 import org.apache.commons.compress.archivers.ArchiveException;
 import org.apache.commons.compress.archivers.ArchiveStreamFactory;
@@ -33,6 +34,10 @@ import org.slf4j.LoggerFactory;
 public class ZipFileUtils {
 
     private static final Logger logger = LoggerFactory.getLogger(ZipFileUtils.class);
+
+    private ZipFileUtils() {
+        throw new IllegalStateException("Class ZipFileUtils is an utility class !");
+    }
 
     public static void compressZipFile(String sourceDir, String zipFileName) throws IOException, ArchiveException {
         if (!validateZipFilename(zipFileName)) {
@@ -53,6 +58,6 @@ public class ZipFileUtils {
     }
 
     private static boolean validateZipFilename(String filename) {
-        return !StringUtils.isEmpty(filename) && filename.trim().toLowerCase().endsWith(".zip");
+        return !StringUtils.isEmpty(filename) && filename.trim().toLowerCase(Locale.ROOT).endsWith(".zip");
     }
 }

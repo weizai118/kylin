@@ -33,6 +33,7 @@ import org.apache.kylin.cube.CubeInstance;
 import org.apache.kylin.cube.CubeManager;
 import org.apache.kylin.cube.CubeSegment;
 import org.apache.kylin.cube.RawQueryLastHacker;
+import org.apache.kylin.cube.common.SegmentPruner;
 import org.apache.kylin.cube.cuboid.Cuboid;
 import org.apache.kylin.cube.gridtable.CuboidToGridTableMapping;
 import org.apache.kylin.cube.gridtable.CuboidToGridTableMappingExt;
@@ -87,15 +88,9 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         GTCubeStorageQueryRequest request = getStorageQueryRequest(context, sqlDigest, returnTupleInfo);
 
         List<CubeSegmentScanner> scanners = Lists.newArrayList();
-        for (CubeSegment cubeSeg : cubeInstance.getSegments(SegmentStatusEnum.READY)) {
-            CubeSegmentScanner scanner;
-
-            if (cubeDesc.getConfig().isSkippingEmptySegments() && cubeSeg.getInputRecords() == 0) {
-                logger.info("Skip cube segment {} because its input record is 0", cubeSeg);
-                continue;
-            }
-
-            scanner = new CubeSegmentScanner(cubeSeg, request.getCuboid(), request.getDimensions(), //
+        SegmentPruner segPruner = new SegmentPruner(sqlDigest.filter);
+        for (CubeSegment cubeSeg : segPruner.listSegmentsForQuery(cubeInstance)) {
+            CubeSegmentScanner scanner = new CubeSegmentScanner(cubeSeg, request.getCuboid(), request.getDimensions(), //
                     request.getGroups(), request.getDynGroups(), request.getDynGroupExprs(), //
                     request.getMetrics(), request.getDynFuncs(), //
                     request.getFilter(), request.getHavingFilter(), request.getContext());
@@ -124,8 +119,8 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         TupleFilter filter = sqlDigest.filter;
 
         // build dimension & metrics
-        Set<TblColRef> dimensions = new LinkedHashSet<TblColRef>();
-        Set<FunctionDesc> metrics = new LinkedHashSet<FunctionDesc>();
+        Set<TblColRef> dimensions = new LinkedHashSet<>();
+        Set<FunctionDesc> metrics = new LinkedHashSet<>();
         buildDimensionsAndMetrics(sqlDigest, dimensions, metrics);
 
         // all dimensions = groups + other(like filter) dimensions
@@ -139,13 +134,13 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         otherDimsD.removeAll(groupsD);
 
         // identify cuboid
-        Set<TblColRef> dimensionsD = new LinkedHashSet<TblColRef>();
+        Set<TblColRef> dimensionsD = new LinkedHashSet<>();
         dimensionsD.addAll(groupsD);
         dimensionsD.addAll(otherDimsD);
         Cuboid cuboid = findCuboid(cubeInstance, dimensionsD, metrics);
         context.setCuboid(cuboid);
 
-        // set cuboid to GridTable mapping;
+        // set cuboid to GridTable mapping
         boolean noDynamicCols;
         // dynamic dimensions
         List<TblColRef> dynGroups = Lists.newArrayList(sqlDigest.dynGroupbyColumns.keySet());
@@ -214,7 +209,7 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
     protected void buildDimensionsAndMetrics(SQLDigest sqlDigest, Collection<TblColRef> dimensions,
             Collection<FunctionDesc> metrics) {
         for (FunctionDesc func : sqlDigest.aggregations) {
-            if (!func.isDimensionAsMetric()) {
+            if (!func.isDimensionAsMetric() && !FunctionDesc.FUNC_GROUPING.equalsIgnoreCase(func.getExpression())) {
                 // use the FunctionDesc from cube desc as much as possible, that has more info such as HLLC precision
                 metrics.add(findAggrFuncFromCubeDesc(func));
             }
@@ -291,7 +286,7 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         } else if (filter instanceof LogicalTupleFilter && filter.getOperator() == FilterOperatorEnum.AND) {
             toCheck = filter.getChildren();
         } else {
-            return (Set<CompareTupleFilter>) Collections.EMPTY_SET;
+            return Collections.emptySet();
         }
 
         Set<CompareTupleFilter> result = Sets.newHashSet();
@@ -311,8 +306,8 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
     private long getQueryFilterMask(Set<TblColRef> filterColumnD) {
         long filterMask = 0;
 
-        logger.info("Filter column set for query: " + filterColumnD.toString());
-        if (filterColumnD.size() != 0) {
+        logger.info("Filter column set for query: %s", filterColumnD);
+        if (filterColumnD.isEmpty() == false) {
             RowKeyColDesc[] allColumns = cubeDesc.getRowkey().getRowKeyColumns();
             for (int i = 0; i < allColumns.length; i++) {
                 if (filterColumnD.contains(allColumns[i].getColRef())) {
@@ -320,7 +315,7 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
                 }
             }
         }
-        logger.info("Filter mask is: " + filterMask);
+        logger.info("Filter mask is: {0}", filterMask);
         return filterMask;
     }
 
@@ -436,21 +431,19 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         if (!groupsD.containsAll(cuboid.getColumns().subList(0, size))) {
             storageLimitLevel = StorageLimitLevel.LIMIT_ON_RETURN_SIZE;
             logger.debug(
-                    "storageLimitLevel set to LIMIT_ON_RETURN_SIZE because groupD is not clustered at head, groupsD: "
-                            + groupsD //
-                            + " with cuboid columns: " + cuboid.getColumns());
+                    "storageLimitLevel set to LIMIT_ON_RETURN_SIZE because groupD is not clustered at head, groupsD: {0} with cuboid columns: {1}", groupsD.toString(), cuboid.getColumns().toString());
         }
 
         if (!dynGroups.isEmpty()) {
             storageLimitLevel = StorageLimitLevel.NO_LIMIT;
-            logger.debug("Storage limit push down is impossible because the query has dynamic groupby " + dynGroups);
+            logger.debug("Storage limit push down is impossible because the query has dynamic groupby {0}", dynGroups);
         }
 
         // derived aggregation is bad, unless expanded columns are already in group by
         if (!groups.containsAll(derivedPostAggregation)) {
             storageLimitLevel = StorageLimitLevel.NO_LIMIT;
-            logger.debug("storageLimitLevel set to NO_LIMIT because derived column require post aggregation: "
-                    + derivedPostAggregation);
+            logger.debug("storageLimitLevel set to NO_LIMIT because derived column require post aggregation: {0}",
+                    derivedPostAggregation);
         }
 
         if (!TupleFilter.isEvaluableRecursively(filter)) {
@@ -460,7 +453,7 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
 
         if (!loosenedColumnD.isEmpty()) { // KYLIN-2173
             storageLimitLevel = StorageLimitLevel.NO_LIMIT;
-            logger.debug("storageLimitLevel set to NO_LIMIT because filter is loosened: " + loosenedColumnD);
+            logger.debug("storageLimitLevel set to NO_LIMIT because filter is loosened: {0}", loosenedColumnD);
         }
 
         if (context.hasSort()) {
@@ -472,7 +465,7 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         for (FunctionDesc functionDesc : functionDescs) {
             if (functionDesc.isDimensionAsMetric()) {
                 storageLimitLevel = StorageLimitLevel.NO_LIMIT;
-                logger.debug("storageLimitLevel set to NO_LIMIT because {} isDimensionAsMetric ", functionDesc);
+                logger.debug("storageLimitLevel set to NO_LIMIT because {0} isDimensionAsMetric ", functionDesc);
             }
         }
 
@@ -491,8 +484,8 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         }
         if (!shardByInGroups.isEmpty()) {
             enabled = false;
-            logger.debug("Aggregate partition results is not beneficial because shard by columns in groupD: "
-                    + shardByInGroups);
+            logger.debug("Aggregate partition results is not beneficial because shard by columns in groupD: {0}",
+                     shardByInGroups);
         }
 
         if (!context.isNeedStorageAggregation()) {
@@ -539,7 +532,7 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
             return null;
 
         // OK, push down
-        logger.info("Push down having filter " + havingFilter);
+        logger.info("Push down having filter {0}", havingFilter);
 
         // convert columns in the filter
         Set<TblColRef> aggrOutCols = new HashSet<>();
@@ -571,21 +564,20 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         }
 
         if (cuboid.requirePostAggregation()) {
-            logger.info("exactAggregation is false because cuboid " + cuboid.getInputID() + "=> " + cuboid.getId());
+            logger.info("exactAggregation is false because cuboid {0}=>{1}", cuboid.getInputID(), cuboid.getId());
             return false;
         }
 
         // derived aggregation is bad, unless expanded columns are already in group by
         if (!groups.containsAll(derivedPostAggregation)) {
-            logger.info("exactAggregation is false because derived column require post aggregation: "
-                    + derivedPostAggregation);
+            logger.info("exactAggregation is false because derived column require post aggregation: {0}",
+                    derivedPostAggregation);
             return false;
         }
 
         // other columns (from filter) is bad, unless they are ensured to have single value
         if (!singleValuesD.containsAll(othersD)) {
-            logger.info("exactAggregation is false because some column not on group by: " + othersD //
-                    + " (single value column: " + singleValuesD + ")");
+            logger.info("exactAggregation is false because some column not on group by: {0} (single value column: {1})", othersD, singleValuesD);
             return false;
         }
 
@@ -608,12 +600,12 @@ public abstract class GTCubeStorageQueryBase implements IStorageQuery {
         if (partDesc.isPartitioned()) {
             TblColRef col = partDesc.getPartitionDateColumnRef();
             if (!groups.contains(col) && !singleValuesD.contains(col)) {
-                logger.info("exactAggregation is false because cube is partitioned and " + col + " is not on group by");
+                logger.info("exactAggregation is false because cube is partitioned and %s is not on group by", col);
                 return false;
             }
         }
 
-        logger.info("exactAggregation is true, cuboid id is " + cuboid.getId());
+        logger.info("exactAggregation is true, cuboid id is {0}", String.valueOf(cuboid.getId()));
         return true;
     }
 

@@ -33,7 +33,7 @@ import org.apache.kylin.metadata.tuple.IEvaluatableTuple;
  * @author xjiang
  */
 public class CompareTupleFilter extends TupleFilter implements IOptimizeableTupleFilter {
-
+    
     public enum CompareResultType {
         AlwaysTrue, AlwaysFalse, Unknown
     }
@@ -133,6 +133,17 @@ public class CompareTupleFilter extends TupleFilter implements IOptimizeableTupl
         this.dynamicVariables.put(variable, value);
         this.conditionValues.add(value);
         this.firstCondValue = this.conditionValues.iterator().next();
+    }
+
+    public void clearPreviousVariableValues(String variable) {
+        Object previousValue = dynamicVariables.get(variable);
+        if (previousValue == null) {
+            return;
+        }
+        if (this.firstCondValue == previousValue) {
+            this.firstCondValue = null;
+        }
+        this.conditionValues.remove(previousValue);
     }
 
     @Override

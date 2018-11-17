@@ -29,6 +29,7 @@ import org.apache.kylin.common.util.Pair;
 import org.apache.kylin.cube.CubeInstance;
 import org.apache.kylin.cube.CubeSegment;
 import org.apache.kylin.engine.mr.IMRInput;
+import org.apache.kylin.engine.spark.ISparkInput;
 import org.apache.kylin.metadata.model.ColumnDesc;
 import org.apache.kylin.metadata.model.IBuildable;
 import org.apache.kylin.metadata.model.ISourceAware;
@@ -36,6 +37,7 @@ import org.apache.kylin.metadata.model.SegmentRange;
 import org.apache.kylin.metadata.model.TableDesc;
 import org.apache.kylin.metadata.model.TableExtDesc;
 import org.apache.kylin.metadata.streaming.StreamingConfig;
+import org.apache.kylin.metadata.streaming.StreamingManager;
 import org.apache.kylin.source.IReadableTable;
 import org.apache.kylin.source.ISampleDataDeployer;
 import org.apache.kylin.source.ISource;
@@ -61,13 +63,15 @@ public class KafkaSource implements ISource {
     public <I> I adaptToBuildEngine(Class<I> engineInterface) {
         if (engineInterface == IMRInput.class) {
             return (I) new KafkaMRInput();
+        } else if(engineInterface == ISparkInput.class) {
+            return (I) new KafkaSparkInput();
         } else {
             throw new RuntimeException("Cannot adapt to " + engineInterface);
         }
     }
 
     @Override
-    public IReadableTable createReadableTable(TableDesc tableDesc) {
+    public IReadableTable createReadableTable(TableDesc tableDesc, String uuid) {
         throw new UnsupportedOperationException();
     }
 
@@ -235,12 +239,31 @@ public class KafkaSource implements ISource {
             public ColumnDesc[] evalQueryMetadata(String query) {
                 throw new UnsupportedOperationException();
             }
+
+
+            @Override
+            public void validateSQL(String query) throws Exception {
+                throw new UnsupportedOperationException();
+            }
         };
     }
 
     @Override
     public ISampleDataDeployer getSampleDataDeployer() {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void unloadTable(String tableName, String project) throws IOException {
+        StreamingConfig config;
+        KafkaConfig kafkaConfig;
+        KylinConfig kylinConfig = KylinConfig.getInstanceFromEnv();
+        StreamingManager streamingManager = StreamingManager.getInstance(kylinConfig);
+        KafkaConfigManager kafkaConfigManager = KafkaConfigManager.getInstance(kylinConfig);
+        config = streamingManager.getStreamingConfig(tableName);
+        kafkaConfig = kafkaConfigManager.getKafkaConfig(tableName);
+        streamingManager.removeStreamingConfig(config);
+        kafkaConfigManager.removeKafkaConfig(kafkaConfig);
     }
 
     @Override

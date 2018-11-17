@@ -21,48 +21,36 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
-import com.google.common.collect.Lists;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapred.FileSplit;
+import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.input.SequenceFileInputFormat;
 import org.apache.kylin.common.KylinConfig;
 import org.apache.kylin.common.util.Bytes;
-import org.apache.kylin.common.util.HadoopUtil;
 import org.apache.kylin.cube.CubeSegment;
 import org.apache.kylin.cube.model.CubeDesc;
 import org.apache.kylin.cube.model.CubeJoinedFlatTableDesc;
 import org.apache.kylin.engine.mr.IMRInput;
 import org.apache.kylin.engine.mr.JobBuilderSupport;
 import org.apache.kylin.engine.mr.common.BatchConstants;
-import org.apache.kylin.engine.mr.common.MapReduceExecutable;
-import org.apache.kylin.engine.mr.steps.CubingExecutableUtil;
 import org.apache.kylin.job.JoinedFlatTable;
-import org.apache.kylin.job.constant.ExecutableConstants;
 import org.apache.kylin.job.engine.JobEngineConfig;
-import org.apache.kylin.job.exception.ExecuteException;
-import org.apache.kylin.job.execution.AbstractExecutable;
 import org.apache.kylin.job.execution.DefaultChainedExecutable;
-import org.apache.kylin.job.execution.ExecutableContext;
-import org.apache.kylin.job.execution.ExecuteResult;
 import org.apache.kylin.metadata.MetadataConstants;
-import org.apache.kylin.metadata.model.DataModelDesc;
 import org.apache.kylin.metadata.model.IJoinedFlatTableDesc;
 import org.apache.kylin.metadata.model.ISegment;
-import org.apache.kylin.metadata.model.SegmentRange;
 import org.apache.kylin.metadata.model.TableDesc;
-import org.apache.kylin.metadata.model.TblColRef;
-import org.apache.kylin.source.hive.CreateFlatHiveTableStep;
-import org.apache.kylin.source.hive.HiveMRInput;
-import org.apache.kylin.source.kafka.hadoop.KafkaFlatTableJob;
-import org.apache.kylin.source.kafka.job.MergeOffsetStep;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class KafkaMRInput implements IMRInput {
+import com.google.common.collect.Lists;
+
+public class KafkaMRInput extends KafkaInputBase implements IMRInput {
 
     private static final Logger logger = LoggerFactory.getLogger(KafkaMRInput.class);
     private CubeSegment cubeSegment;
@@ -74,7 +62,7 @@ public class KafkaMRInput implements IMRInput {
     }
 
     @Override
-    public IMRTableInputFormat getTableInputFormat(TableDesc table) {
+    public IMRTableInputFormat getTableInputFormat(TableDesc table, String uuid) {
 
         return new KafkaTableInputFormat(cubeSegment, null);
     }
@@ -99,7 +87,8 @@ public class KafkaMRInput implements IMRInput {
             job.setInputFormatClass(SequenceFileInputFormat.class);
             String jobId = job.getConfiguration().get(BatchConstants.ARG_CUBING_JOB_ID);
             IJoinedFlatTableDesc flatHiveTableDesc = new CubeJoinedFlatTableDesc(cubeSegment);
-            String inputPath = JoinedFlatTable.getTableDir(flatHiveTableDesc, JobBuilderSupport.getJobWorkingDir(conf, jobId));
+            String inputPath = JoinedFlatTable.getTableDir(flatHiveTableDesc,
+                    JobBuilderSupport.getJobWorkingDir(conf, jobId));
             try {
                 FileInputFormat.addInputPath(job, new Path(inputPath));
             } catch (IOException e) {
@@ -110,17 +99,22 @@ public class KafkaMRInput implements IMRInput {
         @Override
         public Collection<String[]> parseMapperInput(Object mapperInput) {
             Text text = (Text) mapperInput;
-            String[] columns  = Bytes.toString(text.getBytes(), 0, text.getLength()).split(delimiter);
+            String[] columns = Bytes.toString(text.getBytes(), 0, text.getLength()).split(delimiter);
             return Collections.singletonList(columns);
         }
 
+        @Override
+        public String getInputSplitSignature(InputSplit inputSplit) {
+            FileSplit baseSplit = (FileSplit) inputSplit;
+            return baseSplit.getPath().getName() + "_" + baseSplit.getStart() + "_" + baseSplit.getLength();
+        }
     }
 
     public static class BatchCubingInputSide implements IMRBatchCubingInputSide {
 
         final JobEngineConfig conf;
         final CubeSegment seg;
-        private CubeDesc cubeDesc ;
+        private CubeDesc cubeDesc;
         private KylinConfig config;
         protected IJoinedFlatTableDesc flatDesc;
         protected String hiveTableDatabase;
@@ -147,119 +141,24 @@ public class KafkaMRInput implements IMRInput {
                 // directly use flat table location
                 final String intermediateFactTable = flatDesc.getTableName();
                 final String tableLocation = baseLocation + "/" + intermediateFactTable;
-                jobFlow.addTask(createSaveKafkaDataStep(jobFlow.getId(), tableLocation));
+                jobFlow.addTask(createSaveKafkaDataStep(jobFlow.getId(), tableLocation, seg));
                 intermediatePaths.add(tableLocation);
             } else {
-                final String mockFactTableName =  MetadataConstants.KYLIN_INTERMEDIATE_PREFIX + cubeName.toLowerCase() + "_"
-                        + seg.getUuid().replaceAll("-", "_") + "_fact";
-                jobFlow.addTask(createSaveKafkaDataStep(jobFlow.getId(), baseLocation + "/" + mockFactTableName));
-                jobFlow.addTask(createFlatTable(mockFactTableName, baseLocation));
+                final String mockFactTableName = MetadataConstants.KYLIN_INTERMEDIATE_PREFIX
+                        + cubeName.toLowerCase(Locale.ROOT) + "_" + seg.getUuid().replaceAll("-", "_") + "_fact";
+                jobFlow.addTask(createSaveKafkaDataStep(jobFlow.getId(), baseLocation + "/" + mockFactTableName, seg));
+                jobFlow.addTask(createFlatTable(hiveTableDatabase, mockFactTableName, baseLocation, cubeName, cubeDesc,
+                        flatDesc, intermediateTables, intermediatePaths));
             }
-        }
-        private AbstractExecutable createFlatTable(final String mockFactTableName, String baseLocation) {
-            final String hiveInitStatements = JoinedFlatTable.generateHiveInitStatements(hiveTableDatabase);
-
-            final IJoinedFlatTableDesc mockfactDesc = new IJoinedFlatTableDesc() {
-
-                @Override
-                public String getTableName() {
-                    return mockFactTableName;
-                }
-
-                @Override
-                public DataModelDesc getDataModel() {
-                    return cubeDesc.getModel();
-                }
-
-                @Override
-                public List<TblColRef> getAllColumns() {
-                    return flatDesc.getFactColumns();
-                }
-
-                @Override
-                public List<TblColRef> getFactColumns() {
-                    return null;
-                }
-
-                @Override
-                public int getColumnIndex(TblColRef colRef) {
-                    return 0;
-                }
-
-                @Override
-                public SegmentRange getSegRange() {
-                    return null;
-                }
-
-                @Override
-                public TblColRef getDistributedBy() {
-                    return null;
-                }
-
-                @Override
-                public TblColRef getClusterBy() {
-                    return null;
-                }
-
-                @Override
-                public ISegment getSegment() {
-                    return null;
-                }
-
-                @Override
-                public boolean useAlias() {
-                    return false;
-                }
-            };
-            final String dropFactTableHql = JoinedFlatTable.generateDropTableStatement(mockfactDesc);
-            // the table inputformat is sequence file
-            final String createFactTableHql = JoinedFlatTable.generateCreateTableStatement(mockfactDesc, baseLocation, JoinedFlatTable.SEQUENCEFILE);
-
-            final String dropTableHql = JoinedFlatTable.generateDropTableStatement(flatDesc);
-            final String createTableHql = JoinedFlatTable.generateCreateTableStatement(flatDesc, baseLocation);
-            String insertDataHqls = JoinedFlatTable.generateInsertDataStatement(flatDesc);
-            insertDataHqls = insertDataHqls.replace(flatDesc.getDataModel().getRootFactTableName() + " ", mockFactTableName + " ");
-
-            CreateFlatHiveTableStep step = new CreateFlatHiveTableStep();
-            CubingExecutableUtil.setCubeName(cubeName, step.getParams());
-            step.setInitStatement(hiveInitStatements);
-            step.setCreateTableStatement(dropFactTableHql + createFactTableHql + dropTableHql + createTableHql + insertDataHqls);
-            step.setName(ExecutableConstants.STEP_NAME_CREATE_FLAT_HIVE_TABLE);
-
-            intermediateTables.add(flatDesc.getTableName());
-            intermediateTables.add(mockFactTableName);
-            intermediatePaths.add(baseLocation + "/" + flatDesc.getTableName());
-            intermediatePaths.add(baseLocation + "/" + mockFactTableName);
-            return step;
         }
 
         protected String getJobWorkingDir(DefaultChainedExecutable jobFlow) {
             return JobBuilderSupport.getJobWorkingDir(config.getHdfsWorkingDirectory(), jobFlow.getId());
         }
 
-        private MapReduceExecutable createSaveKafkaDataStep(String jobId, String location) {
-            MapReduceExecutable result = new MapReduceExecutable();
-            result.setName("Save data from Kafka");
-            result.setMapReduceJobClass(KafkaFlatTableJob.class);
-            JobBuilderSupport jobBuilderSupport = new JobBuilderSupport(seg, "system");
-            StringBuilder cmd = new StringBuilder();
-            jobBuilderSupport.appendMapReduceParameters(cmd);
-            JobBuilderSupport.appendExecCmdParameters(cmd, BatchConstants.ARG_CUBE_NAME, seg.getRealization().getName());
-            JobBuilderSupport.appendExecCmdParameters(cmd, BatchConstants.ARG_OUTPUT, location);
-            JobBuilderSupport.appendExecCmdParameters(cmd, BatchConstants.ARG_SEGMENT_ID, seg.getUuid());
-            JobBuilderSupport.appendExecCmdParameters(cmd, BatchConstants.ARG_JOB_NAME, "Kylin_Save_Kafka_Data_" + seg.getRealization().getName() + "_Step");
-
-            result.setMapReduceParams(cmd.toString());
-            return result;
-        }
-
         @Override
         public void addStepPhase4_Cleanup(DefaultChainedExecutable jobFlow) {
-            HiveMRInput.GarbageCollectionStep step = new HiveMRInput.GarbageCollectionStep();
-            step.setName(ExecutableConstants.STEP_NAME_HIVE_CLEANUP);
-            step.setIntermediateTables(intermediateTables);
-            step.setExternalDataPaths(intermediatePaths);
-            jobFlow.addTask(step);
+            jobFlow.addTask(createGCStep(intermediateTables, intermediatePaths));
 
         }
 
@@ -279,48 +178,8 @@ public class KafkaMRInput implements IMRInput {
 
         @Override
         public void addStepPhase1_MergeDictionary(DefaultChainedExecutable jobFlow) {
-
-            final MergeOffsetStep result = new MergeOffsetStep();
-            result.setName("Merge offset step");
-
-            CubingExecutableUtil.setCubeName(cubeSegment.getCubeInstance().getName(), result.getParams());
-            CubingExecutableUtil.setSegmentId(cubeSegment.getUuid(), result.getParams());
-            CubingExecutableUtil.setCubingJobId(jobFlow.getId(), result.getParams());
-            jobFlow.addTask(result);
+            jobFlow.addTask(createMergeOffsetStep(jobFlow.getId(), cubeSegment));
         }
     }
 
-    @Deprecated
-    public static class GarbageCollectionStep extends AbstractExecutable {
-        private static final Logger logger = LoggerFactory.getLogger(GarbageCollectionStep.class);
-
-        @Override
-        protected ExecuteResult doWork(ExecutableContext context) throws ExecuteException {
-            try {
-                rmdirOnHDFS(getDataPath());
-            } catch (IOException e) {
-                logger.error("job:" + getId() + " execute finished with exception", e);
-                return ExecuteResult.createError(e);
-            }
-
-            return new ExecuteResult(ExecuteResult.State.SUCCEED, "HDFS path " + getDataPath() + " is dropped.\n");
-        }
-
-        private void rmdirOnHDFS(String path) throws IOException {
-            Path externalDataPath = new Path(path);
-            FileSystem fs = HadoopUtil.getWorkingFileSystem();
-            if (fs.exists(externalDataPath)) {
-                fs.delete(externalDataPath, true);
-            }
-        }
-
-        public void setDataPath(String externalDataPath) {
-            setParam("dataPath", externalDataPath);
-        }
-
-        private String getDataPath() {
-            return getParam("dataPath");
-        }
-
-    }
 }

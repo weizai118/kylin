@@ -60,6 +60,7 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.kylin.common.KylinConfig;
 import org.apache.kylin.common.KylinConfig.SetAndUnsetThreadLocalConfig;
+import org.apache.kylin.common.KylinConfigExt;
 import org.apache.kylin.common.StorageURL;
 import org.apache.kylin.common.util.CliCommandExecutor;
 import org.apache.kylin.common.util.HadoopUtil;
@@ -74,6 +75,8 @@ import org.apache.kylin.metadata.model.TableDesc;
 import org.apache.kylin.metadata.project.ProjectManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.common.collect.Maps;
 
 @SuppressWarnings("static-access")
 public abstract class AbstractHadoopJob extends Configured implements Tool {
@@ -109,6 +112,9 @@ public abstract class AbstractHadoopJob extends Configured implements Tool {
             .hasArg().isRequired(true).withDescription("Partition file path.").create(BatchConstants.ARG_PARTITION);
     protected static final Option OPTION_HTABLE_NAME = OptionBuilder.withArgName(BatchConstants.ARG_HTABLE_NAME)
             .hasArg().isRequired(true).withDescription("HTable name").create(BatchConstants.ARG_HTABLE_NAME);
+    protected static final Option OPTION_DICTIONARY_SHRUNKEN_PATH = OptionBuilder
+            .withArgName(BatchConstants.ARG_SHRUNKEN_DICT_PATH).hasArg().isRequired(false)
+            .withDescription("Dictionary shrunken path").create(BatchConstants.ARG_SHRUNKEN_DICT_PATH);
 
     protected static final Option OPTION_STATISTICS_OUTPUT = OptionBuilder.withArgName(BatchConstants.ARG_STATS_OUTPUT)
             .hasArg().isRequired(false).withDescription("Statistics output").create(BatchConstants.ARG_STATS_OUTPUT);
@@ -124,8 +130,14 @@ public abstract class AbstractHadoopJob extends Configured implements Tool {
     protected static final Option OPTION_LOOKUP_SNAPSHOT_ID = OptionBuilder.withArgName(BatchConstants.ARG_LOOKUP_SNAPSHOT_ID).hasArg()
             .isRequired(true).withDescription("Lookup table snapshotID")
             .create(BatchConstants.ARG_LOOKUP_SNAPSHOT_ID);
+    protected static final Option OPTION_META_URL = OptionBuilder.withArgName(BatchConstants.ARG_META_URL)
+            .hasArg().isRequired(true).withDescription("HDFS metadata url").create(BatchConstants.ARG_META_URL);
+    public static final Option OPTION_HBASE_CONF_PATH = OptionBuilder.withArgName(BatchConstants.ARG_HBASE_CONF_PATH).hasArg()
+            .isRequired(true).withDescription("HBase config file path").create(BatchConstants.ARG_HBASE_CONF_PATH);
 
     private static final String MAP_REDUCE_CLASSPATH = "mapreduce.application.classpath";
+
+    private static final Map<String, KylinConfig> kylinConfigCache = Maps.newConcurrentMap();
 
     protected static void runJob(Tool job, String[] args) {
         try {
@@ -488,6 +500,11 @@ public abstract class AbstractHadoopJob extends Configured implements Tool {
         if (!uri.contains("@hdfs"))
             throw new IllegalArgumentException("meta url should like @hdfs schema");
 
+        if (kylinConfigCache.get(uri) != null) {
+            logger.info("KylinConfig cached for : {}", uri);
+            return kylinConfigCache.get(uri);
+        }
+
         logger.info("Ready to load KylinConfig from uri: {}", uri);
         KylinConfig config;
         FileSystem fs;
@@ -505,7 +522,7 @@ public abstract class AbstractHadoopJob extends Configured implements Tool {
         // limitation of MR API. It works because MR task runs its own process. Do not copy.
         @SuppressWarnings("unused")
         SetAndUnsetThreadLocalConfig shouldAutoClose = KylinConfig.setAndUnsetThreadLocalConfig(config);
-        
+        kylinConfigCache.put(uri, config);
         return config;
     }
 
@@ -537,6 +554,16 @@ public abstract class AbstractHadoopJob extends Configured implements Tool {
             dumpList.addAll(segment.getDictionaryPaths());
         }
         dumpKylinPropsAndMetadata(cube.getProject(), dumpList, cube.getConfig(), conf);
+    }
+
+    protected void attachSegmentsMetadataWithDict(List<CubeSegment> segments, String metaUrl) throws IOException {
+        Set<String> dumpList = new LinkedHashSet<>();
+        dumpList.addAll(JobRelatedMetaUtil.collectCubeMetadata(segments.get(0).getCubeInstance()));
+        for (CubeSegment segment : segments) {
+            dumpList.addAll(segment.getDictionaryPaths());
+            dumpList.add(segment.getStatisticsResourcePath());
+        }
+        JobRelatedMetaUtil.dumpAndUploadKylinPropsAndMetadata(dumpList, (KylinConfigExt) segments.get(0).getConfig(), metaUrl);
     }
 
     protected void attachSegmentMetadataWithDict(CubeSegment segment, Configuration conf) throws IOException {
@@ -595,24 +622,29 @@ public abstract class AbstractHadoopJob extends Configured implements Tool {
     }
 
     protected void cleanupTempConfFile(Configuration conf) {
-        String tempMetaFileString = conf.get("tmpfiles");
-        logger.trace("tempMetaFileString is : " + tempMetaFileString);
-        if (tempMetaFileString != null) {
-            if (tempMetaFileString.startsWith("file://")) {
-                tempMetaFileString = tempMetaFileString.substring("file://".length());
-                File tempMetaFile = new File(tempMetaFileString);
-                if (tempMetaFile.exists()) {
-                    try {
-                        FileUtils.forceDelete(tempMetaFile.getParentFile());
+        String[] tempfiles = StringUtils.split(conf.get("tmpfiles"), ",");
+        if (tempfiles == null) {
+            return;
+        }
+        for (String tempMetaFileString : tempfiles) {
+            logger.trace("tempMetaFileString is : " + tempMetaFileString);
+            if (tempMetaFileString != null) {
+                if (tempMetaFileString.startsWith("file://")) {
+                    tempMetaFileString = tempMetaFileString.substring("file://".length());
+                    File tempMetaFile = new File(tempMetaFileString);
+                    if (tempMetaFile.exists()) {
+                        try {
+                            FileUtils.forceDelete(tempMetaFile.getParentFile());
 
-                    } catch (IOException e) {
-                        logger.warn("error when deleting " + tempMetaFile, e);
+                        } catch (IOException e) {
+                            logger.warn("error when deleting " + tempMetaFile, e);
+                        }
+                    } else {
+                        logger.info("" + tempMetaFileString + " does not exist");
                     }
                 } else {
-                    logger.info("" + tempMetaFileString + " does not exist");
+                    logger.info("tempMetaFileString is not starting with file:// :" + tempMetaFileString);
                 }
-            } else {
-                logger.info("tempMetaFileString is not starting with file:// :" + tempMetaFileString);
             }
         }
     }

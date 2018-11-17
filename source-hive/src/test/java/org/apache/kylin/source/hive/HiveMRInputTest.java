@@ -22,13 +22,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.util.UUID;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.kylin.common.KylinConfig;
 import org.apache.kylin.common.KylinConfig.SetAndUnsetThreadLocalConfig;
+import org.apache.kylin.common.util.RandomUtil;
 import org.apache.kylin.job.execution.DefaultChainedExecutable;
 import org.junit.Assert;
 import org.junit.Test;
@@ -44,10 +44,9 @@ public class HiveMRInputTest {
             when(kylinConfig.getHiveTableDirCreateFirst()).thenReturn(true);
             when(kylinConfig.getHdfsWorkingDirectory()).thenReturn("/tmp/kylin/");
             DefaultChainedExecutable defaultChainedExecutable = mock(DefaultChainedExecutable.class);
-            defaultChainedExecutable.setId(UUID.randomUUID().toString());
+            defaultChainedExecutable.setId(RandomUtil.randomUUID().toString());
 
-            HiveMRInput.BatchCubingInputSide batchCubingInputSide = new HiveMRInput.BatchCubingInputSide(null);
-            String jobWorkingDir = batchCubingInputSide.getJobWorkingDir(defaultChainedExecutable);
+            String jobWorkingDir = HiveInputBase.getJobWorkingDir(defaultChainedExecutable, KylinConfig.getInstanceFromEnv().getHdfsWorkingDirectory());
             jobWorkDirPath = new Path(jobWorkingDir);
             Assert.assertTrue(fileSystem.exists(jobWorkDirPath));
         } finally {
@@ -65,7 +64,7 @@ public class HiveMRInputTest {
 
         StringBuilder hqls = new StringBuilder();
         for (int i = 0; i < viewSize; i++) {
-            String hql = HiveMRInput.BatchCubingInputSide.materializeViewHql(mockedViewNames[i], mockedTalbeNames[i],
+            String hql = HiveInputBase.materializeViewHql(mockedViewNames[i], mockedTalbeNames[i],
                     mockedWorkingDir);
             hqls.append(hql);
         }

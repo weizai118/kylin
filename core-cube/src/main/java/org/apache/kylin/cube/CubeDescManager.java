@@ -278,6 +278,9 @@ public class CubeDescManager {
                             .get(TopNMeasureType.CONFIG_ENCODING_VERSION_PREFIX + parameter.getValue());
                     if (StringUtils.isEmpty(encoding) || DictionaryDimEnc.ENCODING_NAME.equals(encoding)) {
                         keyLength += DictionaryDimEnc.MAX_ENCODING_LENGTH; // estimation for dict encoding
+                    } else if (encoding.startsWith("dict")) {
+                        throw new IllegalArgumentException(
+                                "TOP_N's Encoding is " + encoding + ", please choose the correct one");
                     } else {
                         // non-dict encoding
                         int encodingVersion = 1;

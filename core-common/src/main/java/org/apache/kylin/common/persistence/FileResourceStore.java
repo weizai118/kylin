@@ -19,7 +19,6 @@
 package org.apache.kylin.common.persistence;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -131,14 +130,8 @@ public class FileResourceStore extends ResourceStore {
                 if (f.length() == 0) {
                     logger.warn("Zero length file: " + f.getAbsolutePath());
                 }
-
                 FileInputStream resource = new FileInputStream(f);
-                ByteArrayOutputStream baos = new ByteArrayOutputStream(1000);
-                IOUtils.copy(resource, baos);
-                IOUtils.closeQuietly(resource);
-                byte[] data = baos.toByteArray();
-
-                return new RawResource(new ByteArrayInputStream(data), f.lastModified());
+                return new RawResource(resource, f.lastModified());
             } else {
                 return null;
             }
@@ -168,6 +161,7 @@ public class FileResourceStore extends ResourceStore {
                 IOUtils.copy(content, out);
             } finally {
                 IOUtils.closeQuietly(out);
+                IOUtils.closeQuietly(content);
             }
 
             f.setLastModified(ts);

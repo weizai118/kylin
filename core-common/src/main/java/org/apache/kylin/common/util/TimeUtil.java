@@ -19,11 +19,16 @@
 package org.apache.kylin.common.util;
 
 import java.util.Calendar;
+import java.util.Locale;
 import java.util.TimeZone;
 
 /**
  */
 public class TimeUtil {
+
+    private TimeUtil() {
+        throw new IllegalStateException("Class TimeUtil is an utility class !");
+    }
 
     private static TimeZone gmt = TimeZone.getTimeZone("GMT");
     private static long ONE_MINUTE_TS = 60 * 1000L;
@@ -43,14 +48,14 @@ public class TimeUtil {
     }
 
     public static long getWeekStart(long ts) {
-        Calendar calendar = Calendar.getInstance(gmt);
+        Calendar calendar = Calendar.getInstance(gmt, Locale.ROOT);
         calendar.setTimeInMillis(getDayStart(ts));
         calendar.add(Calendar.DAY_OF_WEEK, calendar.getFirstDayOfWeek() - calendar.get(Calendar.DAY_OF_WEEK));
         return calendar.getTimeInMillis();
     }
 
     public static long getMonthStart(long ts) {
-        Calendar calendar = Calendar.getInstance(gmt);
+        Calendar calendar = Calendar.getInstance(gmt, Locale.ROOT);
         calendar.setTimeInMillis(ts);
         int year = calendar.get(Calendar.YEAR);
         int month = calendar.get(Calendar.MONTH);
@@ -60,7 +65,7 @@ public class TimeUtil {
     }
 
     public static long getQuarterStart(long ts) {
-        Calendar calendar = Calendar.getInstance(gmt);
+        Calendar calendar = Calendar.getInstance(gmt, Locale.ROOT);
         calendar.setTimeInMillis(ts);
         int year = calendar.get(Calendar.YEAR);
         int month = calendar.get(Calendar.MONTH);
@@ -70,7 +75,7 @@ public class TimeUtil {
     }
 
     public static long getYearStart(long ts) {
-        Calendar calendar = Calendar.getInstance(gmt);
+        Calendar calendar = Calendar.getInstance(gmt, Locale.ROOT);
         calendar.setTimeInMillis(ts);
         int year = calendar.get(Calendar.YEAR);
         calendar.clear();

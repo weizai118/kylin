@@ -32,7 +32,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.NavigableSet;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -42,6 +41,7 @@ import org.apache.kylin.common.KylinConfig;
 import org.apache.kylin.common.StorageURL;
 import org.apache.kylin.common.util.ClassUtil;
 import org.apache.kylin.common.util.OptionsHelper;
+import org.apache.kylin.common.util.RandomUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -147,7 +147,7 @@ abstract public class ResourceStore {
     abstract protected NavigableSet<String> listResourcesImpl(String folderPath, boolean recursive) throws IOException;
 
     protected String createMetaStoreUUID() throws IOException {
-        return UUID.randomUUID().toString();
+        return RandomUtil.randomUUID().toString();
     }
 
     public String getMetaStoreUUID() throws IOException {
@@ -230,6 +230,11 @@ abstract public class ResourceStore {
      * return empty list if given path is not a folder or not exists
      */
     abstract protected List<RawResource> getAllResourcesImpl(String folderPath, long timeStart, long timeEndExclusive) throws IOException;
+
+    protected List<RawResource> getAllResourcesImpl(String folderPath, long timeStart, long timeEndExclusive,
+                                                    boolean isAllowBroken) throws IOException {
+        return getAllResourcesImpl(folderPath, timeStart, timeEndExclusive);
+    }
 
     /**
      * returns null if not exists
@@ -393,17 +398,20 @@ abstract public class ResourceStore {
                 origResData.put(resPath, null);
                 origResTimestamp.put(resPath, null);
             } else {
-                origResData.put(resPath, readAll(raw.inputStream));
-                origResTimestamp.put(resPath, raw.timestamp);
+                try {
+                    origResData.put(resPath, readAll(raw.inputStream));
+                    origResTimestamp.put(resPath, raw.timestamp);
+                } finally {
+                    IOUtils.closeQuietly(raw.inputStream);
+                }
             }
         }
 
         private byte[] readAll(InputStream inputStream) throws IOException {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            IOUtils.copy(inputStream, out);
-            inputStream.close();
-            out.close();
-            return out.toByteArray();
+            try (ByteArrayOutputStream out = new ByteArrayOutputStream();) {
+                IOUtils.copy(inputStream, out);
+                return out.toByteArray();
+            }
         }
 
         public void rollback() {
@@ -488,8 +496,11 @@ abstract public class ResourceStore {
             RawResource res = from.getResource(path);
             if (res == null)
                 throw new IllegalStateException("No resource found at -- " + path);
-            to.putResource(path, res.inputStream, res.timestamp);
-            res.inputStream.close();
+            try {
+                to.putResource(path, res.inputStream, res.timestamp);
+            } finally {
+                IOUtils.closeQuietly(res.inputStream);
+            }
         }
 
         String metaDirURI = OptionsHelper.convertToFileURL(metaDir.getAbsolutePath());

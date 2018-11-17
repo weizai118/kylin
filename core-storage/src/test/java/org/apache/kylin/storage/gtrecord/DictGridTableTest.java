@@ -32,7 +32,6 @@ import org.apache.kylin.common.util.BytesSerializer;
 import org.apache.kylin.common.util.Dictionary;
 import org.apache.kylin.common.util.ImmutableBitSet;
 import org.apache.kylin.common.util.LocalFileMetadataTestCase;
-import org.apache.kylin.common.util.Pair;
 import org.apache.kylin.cube.gridtable.CubeCodeSystem;
 import org.apache.kylin.dict.NumberDictionaryForestBuilder;
 import org.apache.kylin.dict.StringBytesConverter;
@@ -65,7 +64,6 @@ import org.apache.kylin.metadata.model.TblColRef.InnerDataTypeEnum;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.Ignore;
 import org.junit.Test;
 
 import com.google.common.collect.Lists;
@@ -121,13 +119,11 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
 
         ByteArray segmentStart = enc(info, 0, "2015-01-14");
         ByteArray segmentStartX = enc(info, 0, "2015-01-14 00:00:00");//when partition col is dict encoded, time format will be free
-        ByteArray segmentEnd = enc(info, 0, "2015-01-15");
         assertEquals(segmentStart, segmentStartX);
 
         {
             LogicalTupleFilter filter = and(timeComp0, ageComp1);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals(1, r.size());//scan range are [close,close]
             assertEquals("[null, 10]-[1421193600000, 10]", r.get(0).toString());
@@ -136,64 +132,57 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         }
         {
             LogicalTupleFilter filter = and(timeComp2, ageComp1);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
-            assertEquals(0, r.size());
+            assertEquals(1, r.size());
         }
         {
             LogicalTupleFilter filter = and(timeComp4, ageComp1);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
-            assertEquals(0, r.size());
+            assertEquals(1, r.size());
         }
         {
             LogicalTupleFilter filter = and(timeComp5, ageComp1);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
-            assertEquals(0, r.size());
+            assertEquals(1, r.size());
         }
         {
             LogicalTupleFilter filter = or(and(timeComp2, ageComp1), and(timeComp1, ageComp1),
                     and(timeComp6, ageComp1));
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
-            assertEquals(1, r.size());
-            assertEquals("[1421193600000, 10]-[null, 10]", r.get(0).toString());
+            assertEquals(2, r.size());
+            assertEquals("[1421193600000, 10]-[null, 10]", r.get(1).toString());
             assertEquals("[[null, 10, null, null, null], [1421193600000, 10, null, null, null]]",
-                    r.get(0).fuzzyKeys.toString());
+                    r.get(1).fuzzyKeys.toString());
         }
         {
             LogicalTupleFilter filter = or(and(timeComp3, ageComp3), and(timeComp7, ageComp1));
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, null, filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals("[[0, 10]-[1421280000000, 30]]", r.toString());
         }
         {
             LogicalTupleFilter filter = or(timeComp2, timeComp1, timeComp6);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
-            assertEquals(1, r.size());
-            assertEquals("[1421193600000, null]-[null, null]", r.get(0).toString());
-            assertEquals(0, r.get(0).fuzzyKeys.size());
+            assertEquals(2, r.size());
+            assertEquals("[1421193600000, null]-[null, null]", r.get(1).toString());
+            assertEquals(0, r.get(1).fuzzyKeys.size());
         }
         {
             //skip FALSE filter
             LogicalTupleFilter filter = and(ageComp1, ConstantTupleFilter.FALSE);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals(0, r.size());
         }
         {
             //TRUE or FALSE filter
             LogicalTupleFilter filter = or(ConstantTupleFilter.TRUE, ConstantTupleFilter.FALSE);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals(1, r.size());
             assertEquals("[null, null]-[null, null]", r.get(0).toString());
@@ -201,8 +190,7 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         {
             //TRUE or other filter
             LogicalTupleFilter filter = or(ageComp1, ConstantTupleFilter.TRUE);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(segmentStart, segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals(1, r.size());
             assertEquals("[null, null]-[null, null]", r.get(0).toString());
@@ -211,12 +199,9 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
 
     @Test
     public void verifySegmentSkipping2() {
-        ByteArray segmentEnd = enc(info, 0, "2015-01-15");
-
         {
             LogicalTupleFilter filter = and(timeComp0, ageComp1);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(new ByteArray(), segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals(1, r.size());//scan range are [close,close]
             assertEquals("[null, 10]-[1421193600000, 10]", r.get(0).toString());
@@ -226,10 +211,9 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
 
         {
             LogicalTupleFilter filter = and(timeComp5, ageComp1);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, Pair.newPair(new ByteArray(), segmentEnd),
-                    info.colRef(0), filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, info.colRef(0), filter);
             List<GTScanRange> r = planner.planScanRanges();
-            assertEquals(0, r.size());//scan range are [close,close]
+            assertEquals(1, r.size());//scan range are [close,close]
         }
     }
 
@@ -239,7 +223,7 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         // flatten or-and & hbase fuzzy value
         {
             LogicalTupleFilter filter = and(timeComp1, or(ageComp1, ageComp2));
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, null, filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals(1, r.size());
             assertEquals("[1421193600000, 10]-[null, 20]", r.get(0).toString());
@@ -249,7 +233,7 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         // pre-evaluate ever false
         {
             LogicalTupleFilter filter = and(timeComp1, timeComp2);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, null, filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals(0, r.size());
         }
@@ -257,7 +241,7 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         // pre-evaluate ever true
         {
             LogicalTupleFilter filter = or(timeComp1, ageComp4);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, null, filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals("[[null, null]-[null, null]]", r.toString());
         }
@@ -265,7 +249,7 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         // merge overlap range
         {
             LogicalTupleFilter filter = or(timeComp1, timeComp3);
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, null, filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals("[[null, null]-[null, null]]", r.toString());
         }
@@ -274,7 +258,7 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         {
             LogicalTupleFilter filter = or(and(timeComp4, ageComp1), and(timeComp4, ageComp2),
                     and(timeComp4, ageComp3));
-            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, null, filter);
+            CubeScanRangePlanner planner = new CubeScanRangePlanner(info, null, filter);
             List<GTScanRange> r = planner.planScanRanges();
             assertEquals(3, r.size());
             assertEquals("[1421280000000, 10]-[1421280000000, 10]", r.get(0).toString());
@@ -374,26 +358,6 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
                 "[null, 30, null, null, 52.5]");
     }
 
-    @Test
-    @Ignore
-    public void testFilterScannerPerf() throws IOException {
-        GridTable table = newTestPerfTable();
-        GTInfo info = table.getInfo();
-
-        CompareTupleFilter fComp1 = compare(info.colRef(0), FilterOperatorEnum.GT, enc(info, 0, "2015-01-14"));
-        CompareTupleFilter fComp2 = compare(info.colRef(1), FilterOperatorEnum.GT, enc(info, 1, "10"));
-        LogicalTupleFilter filter = and(fComp1, fComp2);
-
-        FilterResultCache.ENABLED = false;
-        testFilterScannerPerfInner(table, info, filter);
-        FilterResultCache.ENABLED = true;
-        testFilterScannerPerfInner(table, info, filter);
-        FilterResultCache.ENABLED = false;
-        testFilterScannerPerfInner(table, info, filter);
-        FilterResultCache.ENABLED = true;
-        testFilterScannerPerfInner(table, info, filter);
-    }
-
     @SuppressWarnings("unused")
     private void testFilterScannerPerfInner(GridTable table, GTInfo info, LogicalTupleFilter filter)
             throws IOException {
@@ -408,7 +372,7 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         scanner.close();
         long end = System.currentTimeMillis();
         System.out.println(
-                (end - start) + "ms with filter cache enabled=" + FilterResultCache.ENABLED + ", " + i + " rows");
+                (end - start) + "ms with filter cache enabled=" + FilterResultCache.DEFAULT_OPTION + ", " + i + " rows");
     }
 
     @Test
@@ -451,7 +415,9 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         {
             LogicalTupleFilter filter = and(fComp1, compare(extColB, FilterOperatorEnum.LT, "9"));
             TupleFilter newFilter = GTUtil.convertFilterColumnsAndConstants(filter, info, colMapping, null);
-            assertEquals(ConstantTupleFilter.FALSE, newFilter);
+            assertEquals(
+                    "AND [UNKNOWN_MODEL:NULL.GT_MOCKUP_TABLE.0 GT [\\x00\\x00\\x01J\\xE5\\xBD\\x5C\\x00], UNKNOWN_MODEL:NULL.GT_MOCKUP_TABLE.1 ISNOTNULL []]",
+                    newFilter.toString());
         }
 
         // $1<"10" needs no rounding
@@ -516,7 +482,8 @@ public class DictGridTableTest extends LocalFileMetadataTestCase {
         {
             LogicalTupleFilter filter = and(fComp1, compare(extColB, FilterOperatorEnum.GT, "101"));
             TupleFilter newFilter = GTUtil.convertFilterColumnsAndConstants(filter, info, colMapping, null);
-            assertEquals(ConstantTupleFilter.FALSE, newFilter);
+            assertEquals("AND [UNKNOWN_MODEL:NULL.GT_MOCKUP_TABLE.0 GT [\\x00\\x00\\x01J\\xE5\\xBD\\x5C\\x00], UNKNOWN_MODEL:NULL.GT_MOCKUP_TABLE.1 ISNOTNULL []]",
+                    newFilter.toString());
         }
 
         // $1>"100" needs no rounding

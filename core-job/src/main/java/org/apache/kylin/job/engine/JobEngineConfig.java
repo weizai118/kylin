@@ -21,6 +21,7 @@ package org.apache.kylin.job.engine;
 import java.io.File;
 import java.io.IOException;
 
+import java.util.Locale;
 import org.apache.commons.lang.StringUtils;
 import org.apache.kylin.common.KylinConfig;
 import org.apache.kylin.common.util.OptionsHelper;
@@ -33,7 +34,7 @@ import org.slf4j.LoggerFactory;
 public class JobEngineConfig {
     private static final Logger logger = LoggerFactory.getLogger(JobEngineConfig.class);
     public static final String HADOOP_JOB_CONF_FILENAME = "kylin_job_conf";
-    public static final String DEFAUL_JOB_CONF_SUFFIX = "";
+    public static final String DEFAULT_JOB_CONF_SUFFIX = "";
     public static final String IN_MEM_JOB_CONF_SUFFIX = "inmem";
 
     private static File getJobConfig(String fileName) {
@@ -52,7 +53,7 @@ public class JobEngineConfig {
     private String getHadoopJobConfFilePath(String suffix, boolean appendSuffix) throws IOException {
         String hadoopJobConfFile;
         if (suffix != null && appendSuffix) {
-            hadoopJobConfFile = (HADOOP_JOB_CONF_FILENAME + "_" + suffix.toLowerCase() + ".xml");
+            hadoopJobConfFile = (HADOOP_JOB_CONF_FILENAME + "_" + suffix.toLowerCase(Locale.ROOT) + ".xml");
         } else {
             hadoopJobConfFile = (HADOOP_JOB_CONF_FILENAME + ".xml");
         }

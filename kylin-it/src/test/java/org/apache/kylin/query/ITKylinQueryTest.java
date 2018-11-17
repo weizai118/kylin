@@ -245,6 +245,11 @@ public class ITKylinQueryTest extends KylinTestBase {
     }
 
     @Test
+    public void testUnionallQuery() throws Exception {
+        execAndCompQuery(getQueryFolderPrefix() + "src/test/resources/query/sql_unionall", null, true);
+    }
+
+    @Test
     public void testTimeStampAdd() throws Exception {
         execAndCompQuery(getQueryFolderPrefix() + "src/test/resources/query/sql_timestamp", null, true);
     }
@@ -417,8 +422,37 @@ public class ITKylinQueryTest extends KylinTestBase {
 
     @Test
     public void testExpressionQuery() throws Exception {
-        if (config.isDynamicColumnEnabled()) {
-            batchExecuteQuery(getQueryFolderPrefix() + "src/test/resources/query/sql_expression");
+        boolean ifDynamicColumnEnabled = config.isDynamicColumnEnabled();
+        if (!ifDynamicColumnEnabled) {
+            config.setProperty("kylin.query.enable-dynamic-column", "true");
+        }
+        batchExecuteQuery(getQueryFolderPrefix() + "src/test/resources/query/sql_expression");
+        if (!ifDynamicColumnEnabled) {
+            config.setProperty("kylin.query.enable-dynamic-column", "false");
+        }
+    }
+
+    @Test
+    public void testDictionaryEnumerator() throws Exception {
+        boolean ifDictEnumeratorEnabled = config.isDictionaryEnumeratorEnabled();
+        if (!ifDictEnumeratorEnabled) {
+            config.setProperty("kylin.query.enable-dict-enumerator", "true");
+        }
+        batchExecuteQuery(getQueryFolderPrefix() + "src/test/resources/query/sql_dict_enumerator");
+        if (!ifDictEnumeratorEnabled) {
+            config.setProperty("kylin.query.enable-dict-enumerator", "false");
+        }
+    }
+
+    @Test
+    public void testOrdinalQuery() throws Exception {
+        String sqlConformance = config.getCalciteExtrasProperties().getProperty("conformance");
+        if (!"LENIENT".equalsIgnoreCase(sqlConformance)) {
+            config.setProperty("kylin.query.calcite.extras-props.conformance", "LENIENT");
+        }
+        batchExecuteQuery(getQueryFolderPrefix() + "src/test/resources/query/sql_ordinal");
+        if (!"LENIENT".equalsIgnoreCase(sqlConformance)) {
+            config.setProperty("kylin.query.calcite.extras-props.conformance", sqlConformance);
         }
     }
 

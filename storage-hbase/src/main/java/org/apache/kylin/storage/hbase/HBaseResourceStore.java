@@ -27,7 +27,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
 import java.util.TreeSet;
-import java.util.UUID;
 
 import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -44,6 +43,7 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
+import org.apache.hadoop.hbase.client.RetriesExhaustedException;
 import org.apache.hadoop.hbase.filter.CompareFilter;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.filter.FilterList;
@@ -58,6 +58,7 @@ import org.apache.kylin.common.persistence.WriteConflictException;
 import org.apache.kylin.common.util.Bytes;
 import org.apache.kylin.common.util.BytesUtil;
 import org.apache.kylin.common.util.HadoopUtil;
+import org.apache.kylin.common.util.RandomUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -149,7 +150,7 @@ public class HBaseResourceStore extends ResourceStore {
             String uuid = desc.getValue(HBaseConnection.HTABLE_UUID_TAG);
             if (uuid != null)
                 return uuid;
-            return UUID.randomUUID().toString();
+            return RandomUtil.randomUUID().toString();
         } catch (Exception e) {
             return null;
         }
@@ -317,13 +318,20 @@ public class HBaseResourceStore extends ResourceStore {
             byte[] bOldTS = oldTS == 0 ? null : Bytes.toBytes(oldTS);
             Put put = buildPut(resPath, newTS, row, content, table);
 
-            boolean ok = table.checkAndPut(row, B_FAMILY, B_COLUMN_TS, bOldTS, put);
-            logger.trace("Update row " + resPath + " from oldTs: " + oldTS + ", to newTs: " + newTS
-                    + ", operation result: " + ok);
-            if (!ok) {
+            try {
+                boolean ok = table.checkAndPut(row, B_FAMILY, B_COLUMN_TS, bOldTS, put);
+                logger.trace("Update row " + resPath + " from oldTs: " + oldTS + ", to newTs: " + newTS + ", operation result: " + ok);
+                if (!ok) {
+                    long real = getResourceTimestampImpl(resPath);
+                    throw new WriteConflictException(
+                            "Overwriting conflict " + resPath + ", expect old TS " + oldTS + ", but it is " + real);
+                }
+            } catch (RetriesExhaustedException e){
                 long real = getResourceTimestampImpl(resPath);
-                throw new WriteConflictException(
-                        "Overwriting conflict " + resPath + ", expect old TS " + oldTS + ", but it is " + real);
+                // rpc timeout but resource has been already updated
+                if(newTS != real){
+                    throw e;
+                }
             }
 
             return newTS;

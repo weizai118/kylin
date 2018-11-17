@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.IllegalFormatException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.apache.commons.lang3.StringUtils;
@@ -202,6 +203,16 @@ public class ExecutableManager {
         }
     }
 
+    public Map<String, ExecutableOutputPO> getAllOutputDigests(long timeStartInMillis, long timeEndInMillis) {
+        final List<ExecutableOutputPO> jobOutputs = executableDao.getJobOutputDigests(timeStartInMillis,
+                timeEndInMillis);
+        HashMap<String, ExecutableOutputPO> result = Maps.newHashMap();
+        for (ExecutableOutputPO jobOutput : jobOutputs) {
+            result.put(jobOutput.getId(), jobOutput);
+        }
+        return result;
+    }
+
     public List<AbstractExecutable> getAllExecutables() {
         try {
             List<AbstractExecutable> ret = Lists.newArrayList();
@@ -236,6 +247,19 @@ public class ExecutableManager {
             logger.error("error get All Jobs", e);
             throw new RuntimeException(e);
         }
+    }
+
+    public List<AbstractExecutable> getAllExecutableDigests(long timeStartInMillis, long timeEndInMillis) {
+        List<AbstractExecutable> ret = Lists.newArrayList();
+        for (ExecutablePO po : executableDao.getJobDigests(timeStartInMillis, timeEndInMillis)) {
+            try {
+                AbstractExecutable ae = parseTo(po);
+                ret.add(ae);
+            } catch (IllegalArgumentException e) {
+                logger.error("error parsing one executabePO: ", e);
+            }
+        }
+        return ret;
     }
 
     public List<String> getAllJobIds() {
@@ -418,7 +442,6 @@ public class ExecutableManager {
     public void forceKillJob(String jobId) {
         try {
             final ExecutableOutputPO jobOutput = executableDao.getJobOutput(jobId);
-            jobOutput.setStatus(ExecutableState.ERROR.toString());
             List<ExecutablePO> tasks = executableDao.getJob(jobId).getTasks();
 
             for (ExecutablePO task : tasks) {
@@ -429,9 +452,28 @@ public class ExecutableManager {
                 }
                 break;
             }
-            executableDao.updateJobOutput(jobOutput);
+
+            if (!jobOutput.getStatus().equals(ExecutableState.ERROR.toString())) {
+                jobOutput.setStatus(ExecutableState.ERROR.toString());
+                executableDao.updateJobOutput(jobOutput);
+            }
         } catch (PersistentException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    public void forceKillJobWithRetry(String jobId) {
+        boolean done = false;
+
+        while (!done) {
+            try {
+                forceKillJob(jobId);
+                done = true;
+            } catch (RuntimeException e) {
+                if (!(e.getCause() instanceof PersistentException)) {
+                    done = true;
+                }
+            }
         }
     }
 
@@ -451,6 +493,10 @@ public class ExecutableManager {
     }
 
     public void addJobInfo(String id, Map<String, String> info) {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new RuntimeException("Current thread is interrupted, aborting");
+        }
+
         if (info == null) {
             return;
         }
@@ -466,7 +512,7 @@ public class ExecutableManager {
         if (info.containsKey(YARN_APP_ID) && !StringUtils.isEmpty(config.getJobTrackingURLPattern())) {
             String pattern = config.getJobTrackingURLPattern();
             try {
-                String newTrackingURL = String.format(pattern, info.get(YARN_APP_ID));
+                String newTrackingURL = String.format(Locale.ROOT, pattern, info.get(YARN_APP_ID));
                 info.put(YARN_APP_URL, newTrackingURL);
             } catch (IllegalFormatException ife) {
                 logger.error("Illegal tracking url pattern: " + config.getJobTrackingURLPattern());
@@ -507,6 +553,10 @@ public class ExecutableManager {
             if (tasks != null && !tasks.isEmpty()) {
                 Preconditions.checkArgument(result instanceof ChainedExecutable);
                 for (ExecutablePO subTask : tasks) {
+                    AbstractExecutable subTaskExecutable = parseTo(subTask);
+                    if (subTaskExecutable != null) {
+                        subTaskExecutable.setParentExecutable(result);
+                    }
                     ((ChainedExecutable) result).addTask(parseTo(subTask));
                 }
             }
